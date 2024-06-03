@@ -134,6 +134,40 @@ DItemRevisionGUID=
 GenerateClassCluster=0
 DocumentUniqueId=ODVCOVUT
 
+[Document6]
+DocumentPath=cobra.BomDoc
+AnnotationEnabled=1
+AnnotateStartValue=1
+AnnotationIndexControlEnabled=0
+AnnotateSuffix=
+AnnotateScope=All
+AnnotateOrder=-1
+DoLibraryUpdate=1
+DoDatabaseUpdate=1
+ClassGenCCAutoEnabled=1
+ClassGenCCAutoRoomEnabled=0
+ClassGenNCAutoScope=None
+DItemRevisionGUID=
+GenerateClassCluster=0
+DocumentUniqueId=
+
+[Document7]
+DocumentPath=Standard-Outputs-2layers.OutJob
+AnnotationEnabled=1
+AnnotateStartValue=1
+AnnotationIndexControlEnabled=0
+AnnotateSuffix=
+AnnotateScope=All
+AnnotateOrder=-1
+DoLibraryUpdate=1
+DoDatabaseUpdate=1
+ClassGenCCAutoEnabled=1
+ClassGenCCAutoRoomEnabled=0
+ClassGenNCAutoScope=None
+DItemRevisionGUID=
+GenerateClassCluster=0
+DocumentUniqueId=
+
 [ProjectVariant1]
 UniqueID=A3039D55-1215-44BD-8D58-23939B8DC18F
 Description=No Crystal
@@ -142,6 +176,18 @@ ParameterCount=0
 VariationCount=1
 Variation1=Designator=X?|UniqueId=\VIWQJVML|Kind=1|AlternatePart= 
 ParamVariationCount=0
+
+[GeneratedDocument1]
+DocumentPath=Outputs\Manufacture\ASSEM\cobra\Test Points\Assembly Testpoint Report for cobra.ipc
+DItemRevisionGUID=
+
+[GeneratedDocument2]
+DocumentPath=Outputs\Manufacture\ASSEM\cobra\Pick Place\Pick Place for cobra.csv
+DItemRevisionGUID=
+
+[GeneratedDocument3]
+DocumentPath=Outputs\Manufacture\ASSEM\cobra\Pick Place\Pick Place for cobra.txt
+DItemRevisionGUID=
 
 [Configuration1]
 Name=Sources
@@ -496,6 +542,22 @@ OutputDocumentPath1=
 OutputVariantName1=[No Variations]
 OutputDefault1=0
 PageOptions1=Record=PageOptions|CenterHorizontal=True|CenterVertical=True|PrintScale=1.00|XCorrection=1.00|YCorrection=1.00|PrintKind=1|BorderSize=5000000|LeftOffset=0|BottomOffset=0|Orientation=2|PaperLength=1000|PaperWidth=1000|Scale=100|PaperSource=7|PrintQuality=-3|MediaType=1|DitherType=10|PrintScaleMode=1|PaperKind=A4|PaperIndex=9
+Configuration1_Name1=ColumnNameFormat
+Configuration1_Item1=CaptionAsName
+Configuration1_Name2=ForceUpdateSettings
+Configuration1_Item2=False
+Configuration1_Name3=General
+Configuration1_Item3=OpenExported=True|AddToProject=False|ReportBOMViolationsInMessages=False|ForceFit=False|NotFitted=False|Database=True|DatabasePriority=False|IncludePcbData=False|IncludeVaultData=False|IncludeCloudData=False|IncludeDocumentData=False|IncludeAlternatives=True|ShowExportOptions=True|TemplateFilename=|TemplateVaultGuid=|TemplateItemGuid=|TemplateRevisionGuid=|BatchMode=5|FormWidth=1200|FormHeight=710|SupplierProdQty=1|SupplierAutoQty=True|SupplierUseCachedPricing=False|SupplierCurrency=USD|SolutionsPerItem=1|SuppliersPerSolution=1|ViewType=0|UseDirectApi=True|BomSetName=BOM set 2
+Configuration1_Name4=GroupOrder
+Configuration1_Item4=
+Configuration1_Name5=VisibleOrder
+Configuration1_Item5=Line #=54|Comment=114|MPN=100|Description=100|Designator=100|Quantity=67|LCSC PN=84
+Configuration1_Name6=VisibleOrder_Base
+Configuration1_Item6=Line #=54|Comment=114|MPN=100|Description=100|Designator=100|Quantity=67|LCSC PN=84
+Configuration1_Name7=VisibleOrder_Consolidated
+Configuration1_Item7=Line #=54|Comment=114|Description=100|Designator=100|Quantity=67|Manufacturer 1=101|Manufacturer Part Number 1=170|Manufacturer Lifecycle 1=146|Supplier 1=74|Supplier Part Number 1=142|Supplier Unit Price 1=126|Supplier Subtotal 1=120|Quantity@No Crystal=105|Price@No Crystal=112
+Configuration1_Name8=VisibleOrder_Flat
+Configuration1_Item8=Line #=54|Comment=114|Description=100|Designator=78|Manufacturer 1=101|Manufacturer Part Number 1=170|Manufacturer Lifecycle 1=146|Supplier 1=74|Supplier Part Number 1=142|Supplier Unit Price 1=126|Supplier Subtotal 1=120
 OutputType2=BOM_ReportCompare
 OutputName2=BOM Compare
 OutputDocumentPath2=
