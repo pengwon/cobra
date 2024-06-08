@@ -1023,13 +1023,13 @@ class MLX90640:
                 )
 
                 if To < self.params.ct[1]:
-                    range = 0
+                    cr_range = 0
                 elif To < self.params.ct[2]:
-                    range = 1
+                    cr_range = 1
                 elif To < self.params.ct[3]:
-                    range = 2
+                    cr_range = 2
                 else:
-                    range = 3
+                    cr_range = 3
 
                 To = (
                     np.sqrt(
@@ -1037,11 +1037,11 @@ class MLX90640:
                             irData
                             / (
                                 alphaCompensated
-                                * alphaCorrR[range]
+                                * alphaCorrR[cr_range]
                                 * (
                                     1
-                                    + self.params.ksTo[range]
-                                    * (To - self.params.ct[range])
+                                    + self.params.ksTo[cr_range]
+                                    * (To - self.params.ct[cr_range])
                                 )
                             )
                             + taTr
