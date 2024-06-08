@@ -101,25 +101,24 @@ class MLX90640_I2CDriver:
 
         return data
 
-    def write_word(self, slaveAddr, writeAddress, data):
+    def write_word(self, slave_address, write_address, data):
         """
-        Writes a word of data to the specified I2C slave device.
+        Writes a word of data to a specific address on the I2C bus.
 
-        Parameters:
-        - slaveAddr (int): The address of the I2C slave device.
-        - writeAddress (int): The address to write the data to.
-        - data (int): The data to be written.
+        Args:
+            slave_address (int): The slave address of the device.
+            write_address (int): The address to write the data to.
+            data (int): The data to be written.
 
         Returns:
-        - success (int): The success of the write operation. Returns 0 if successful, otherwise returns -1.
+            bool: True if the write operation was successful, False otherwise.
         """
-
         # The first byte is the slave address with the write direction bit
         # The second and third bytes are the write address
         # The fourth and fifth bytes are the data
         write_data = (
-            bytes([slaveAddr << 1])
-            + writeAddress.to_bytes(2, "big")
+            bytes([slave_address << 1])
+            + write_address.to_bytes(2, "big")
             + data.to_bytes(2, "big")
         )
 
@@ -213,10 +212,11 @@ MLX90640_STAT_DATA_READY_MASK = 1 << 3
 MLX90640_CTRL_REG = 0x800D
 MLX90640_CTRL_TRIG_READY_MASK = 1 << 15
 MLX90640_CTRL_REFRESH_SHIFT = 7
+MLX90640_CTRL_REFRESH_MASK = 0x07 << MLX90640_CTRL_REFRESH_SHIFT
 MLX90640_CTRL_RESOLUTION_SHIFT = 10
-MLX90640_CTRL_RESOLUTION_MASK = ~(0x03 << MLX90640_CTRL_RESOLUTION_SHIFT)
+MLX90640_CTRL_RESOLUTION_MASK = 0x03 << MLX90640_CTRL_RESOLUTION_SHIFT
 MLX90640_CTRL_MEAS_MODE_SHIFT = 12
-MLX90640_CTRL_MEAS_MODE_MASK = 1 << MLX90640_CTRL_MEAS_MODE_SHIFT
+MLX90640_CTRL_MEAS_MODE_MASK = 0x01 << MLX90640_CTRL_MEAS_MODE_SHIFT
 MLX90640_MS_BYTE_SHIFT = 8
 MLX90640_MS_BYTE_MASK = 0xFF00
 MLX90640_LS_BYTE_MASK = 0x00FF
@@ -798,14 +798,14 @@ class MLX90640:
         else:
             return values[n // 2]
 
-    def _is_pixel_bad(self, pixel, params):
+    def _is_pixel_bad(self, pixel):
         for i in range(5):
             if (
-                pixel == params["outlier_pixels"][i]
-                or pixel == params["broken_pixels"][i]
+                pixel == self.params.outlierPixels[i]
+                or pixel == self.params.brokenPixels[i]
             ):
-                return 1
-        return 0
+                return True
+        return False
 
     def get_vdd(self, frame_data=None):
         if frame_data is None:
@@ -1055,16 +1055,116 @@ class MLX90640:
         return result
 
     def set_resolution(self, resolution):
-        pass
+        """
+        Sets the resolution of the MLX90640 sensor.
+
+        Args:
+            resolution (int): The desired resolution value.
+            - 0: ADC set to 16 bit resolution
+            - 1: ADC set to 17 bit resolution
+            - 2: ADC set to 18 bit resolution (default)
+            - 3: ADC set to 19 bit resolution
+
+        Returns:
+            bool: True if the resolution was set successfully, False otherwise.
+        """
+        try:
+            controlRegister1 = self.i2c_driver.read_words(
+                self.address, MLX90640_CTRL_REG, 1
+            )[0]
+            value = controlRegister1 & ~MLX90640_CTRL_RESOLUTION_MASK
+            value |= resolution << MLX90640_CTRL_RESOLUTION_SHIFT
+            self.i2c_driver.write_word(self.address, MLX90640_CTRL_REG, value)
+            return True
+        except Exception as e:
+            print(f"Error: {e}")
+            return False
 
     def get_cur_resolution(self):
-        pass
+        """
+        Get the current resolution of the MLX90640 sensor.
 
-    def set_refresh_rate(self, refreshRate):
-        pass
+        Returns:
+            int: The current resolution of the sensor.
+            - 0: ADC set to 16 bit resolution
+            - 1: ADC set to 17 bit resolution
+            - 2: ADC set to 18 bit resolution (default)
+            - 3: ADC set to 19 bit resolution
+
+        Raises:
+            Exception: If there is an error reading the control register.
+        """
+        try:
+            controlRegister1 = self.i2c_driver.read_words(
+                self.address, MLX90640_CTRL_REG, 1
+            )[0]
+            resolutionRAM = (
+                controlRegister1 & MLX90640_CTRL_RESOLUTION_MASK
+            ) >> MLX90640_CTRL_RESOLUTION_SHIFT
+            return resolutionRAM
+        except Exception as e:
+            print(f"Error: {e}")
+            return None
+
+    def set_refresh_rate(self, refresh_rate):
+        """
+        Set the refresh rate of the sensor.
+
+        Args:
+            refresh_rate (int): The refresh rate value to set. Valid values are:
+            - 0: IR refresh rate = 0.5Hz
+            - 1: IR refresh rate = 1Hz
+            - 2: IR refresh rate = 2Hz (default)
+            - 3: IR refresh rate = 4Hz
+            - 4: IR refresh rate = 8Hz
+            - 5: IR refresh rate = 16Hz
+            - 6: IR refresh rate = 32Hz
+            - 7: IR refresh rate = 64Hz
+
+        Returns:
+            bool: True if the refresh rate was set successfully, False otherwise.
+        """
+        try:
+            controlRegister1 = self.i2c_driver.read_words(
+                self.address, MLX90640_CTRL_REG, 1
+            )[0]
+            value = controlRegister1 & ~MLX90640_CTRL_REFRESH_MASK
+            value |= refresh_rate << MLX90640_CTRL_REFRESH_SHIFT
+            self.i2c_driver.write_word(self.address, MLX90640_CTRL_REG, value)
+            return True
+        except Exception as e:
+            print(f"Error: {e}")
+            return False
 
     def get_refresh_rate(self):
-        pass
+        """
+        Get the refresh rate of the MLX90640 sensor.
+
+        Returns:
+            int: The refresh rate value.
+            - 0: IR refresh rate = 0.5Hz
+            - 1: IR refresh rate = 1Hz
+            - 2: IR refresh rate = 2Hz (default)
+            - 3: IR refresh rate = 4Hz
+            - 4: IR refresh rate = 8Hz
+            - 5: IR refresh rate = 16Hz
+            - 6: IR refresh rate = 32Hz
+            - 7: IR refresh rate = 64Hz
+
+        Raises:
+            Exception: If there is an error reading the control register.
+        """
+        try:
+            controlRegister1 = self.i2c_driver.read_words(
+                self.address, MLX90640_CTRL_REG, 1
+            )[0]
+            refreshRate = (
+                controlRegister1 & MLX90640_CTRL_REFRESH_MASK
+            ) >> MLX90640_CTRL_REFRESH_SHIFT
+            return refreshRate
+        except Exception as e:
+            print(f"Error: {e}")
+            return None
 
     def get_sub_page_number(self, frame_data=None):
         if frame_data is None:
@@ -1109,5 +1209,68 @@ class MLX90640:
             print(f"Error: {e}")
             return False
 
-    def bad_pixels_correction(self, pixels, to, mode, params):
-        pass
+    def bad_pixels_correction(self, pixels, to, mode):
+        pix = 0
+        while pixels[pix] != 0xFFFF:
+            line = pixels[pix] >> 5
+            column = pixels[pix] - (line << 5)
+
+            if mode == 1:
+                if line == 0:
+                    if column == 0:
+                        to[pixels[pix]] = to[33]
+                    elif column == 31:
+                        to[pixels[pix]] = to[62]
+                    else:
+                        to[pixels[pix]] = (
+                            to[pixels[pix] + 31] + to[pixels[pix] + 33]
+                        ) / 2.0
+                elif line == 23:
+                    if column == 0:
+                        to[pixels[pix]] = to[705]
+                    elif column == 31:
+                        to[pixels[pix]] = to[734]
+                    else:
+                        to[pixels[pix]] = (
+                            to[pixels[pix] - 33] + to[pixels[pix] - 31]
+                        ) / 2.0
+                elif column == 0:
+                    to[pixels[pix]] = (
+                        to[pixels[pix] - 31] + to[pixels[pix] + 33]
+                    ) / 2.0
+                elif column == 31:
+                    to[pixels[pix]] = (
+                        to[pixels[pix] - 33] + to[pixels[pix] + 31]
+                    ) / 2.0
+                else:
+                    ap = [
+                        to[pixels[pix] - 33],
+                        to[pixels[pix] - 31],
+                        to[pixels[pix] + 31],
+                        to[pixels[pix] + 33],
+                    ]
+                    to[pixels[pix]] = np.median(ap)
+            else:
+                if column == 0:
+                    to[pixels[pix]] = to[pixels[pix] + 1]
+                elif column == 1 or column == 30:
+                    to[pixels[pix]] = (to[pixels[pix] - 1] + to[pixels[pix] + 1]) / 2.0
+                elif column == 31:
+                    to[pixels[pix]] = to[pixels[pix] - 1]
+                else:
+                    if not self._is_pixel_bad(
+                        pixels[pix] - 2
+                    ) and not self._is_pixel_bad(pixels[pix] + 2):
+                        ap = [
+                            to[pixels[pix] + 1] - to[pixels[pix] + 2],
+                            to[pixels[pix] - 1] - to[pixels[pix] - 2],
+                        ]
+                        if abs(ap[0]) > abs(ap[1]):
+                            to[pixels[pix]] = to[pixels[pix] - 1] + ap[1]
+                        else:
+                            to[pixels[pix]] = to[pixels[pix] + 1] + ap[0]
+                    else:
+                        to[pixels[pix]] = (
+                            to[pixels[pix] - 1] + to[pixels[pix] + 1]
+                        ) / 2.0
+            pix += 1
