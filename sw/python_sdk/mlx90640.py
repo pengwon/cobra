@@ -2,6 +2,7 @@ import ctypes
 from dataclasses import dataclass
 from typing import List
 import numpy as np
+import math
 
 
 class MLX90640_I2CDriver:
@@ -17,6 +18,9 @@ class MLX90640_I2CDriver:
 
         self.dll.CH341CloseDevice.argtypes = [ctypes.c_ulong]
         self.dll.CH341CloseDevice.restype = ctypes.c_void_p
+
+        self.dll.CH341ResetDevice.argtypes = [ctypes.c_ulong]
+        self.dll.CH341ResetDevice.restype = ctypes.c_bool
 
         self.dll.CH341SetStream.argtypes = [ctypes.c_ulong, ctypes.c_ulong]
         self.dll.CH341SetStream.restype = ctypes.c_bool
@@ -53,15 +57,17 @@ class MLX90640_I2CDriver:
         success = self.dll.CH341ResetDevice(self.device_index)
         if not success:
             print("Failed to reset I2C.")
+            return False
 
+        self.init()
         return success
 
-    def read_words(self, slave_addr, start_address, n_mem_address_read):
+    def read_words(self, slave_address, start_address, n_mem_address_read):
         """
         Reads a word list from the I2C bus.
 
         Args:
-            slave_addr (int): The slave address of the device.
+            slave_address (int): The slave address of the device.
             start_address (int): The start address to read from.
             n_mem_address_read (int): The number of memory addresses to read.
 
@@ -73,7 +79,7 @@ class MLX90640_I2CDriver:
         # Prepare the write data
         # The first byte is the slave address with the write direction bit
         # The second and third bytes are the start address
-        write_data = bytes([slave_addr << 1]) + start_address.to_bytes(2, "big")
+        write_data = bytes([slave_address << 1]) + start_address.to_bytes(2, "big")
 
         # Convert write_data to ctypes buffer
         write_buffer = ctypes.create_string_buffer(write_data)
@@ -91,11 +97,14 @@ class MLX90640_I2CDriver:
         )
 
         if success:
-            # Convert the read data to a list of integers
-            data = [
-                int.from_bytes(read_buffer[i : i + 2], "big")
-                for i in range(0, len(read_buffer), 2)
-            ]
+            # if raw:
+            #     # Convert the read data to a list of integers
+            #     data = [
+            #         int.from_bytes(read_buffer[i : i + 2], "big")
+            #         for i in range(0, len(read_buffer), 2)
+            #     ]
+            # else:
+            data = np.frombuffer(read_buffer, dtype=">i2").tolist()
         else:
             data = []
 
@@ -149,6 +158,10 @@ class MLX90640_I2CDriver:
     def notify_callback(self):
         # Notify callback function.
         pass
+
+    def close_device(self):
+        if self.handle != self.INVALID_HANDLE_VALUE:
+            self.dll.CH341CloseDevice(self.device_index)
 
 
 # Parameter structure
@@ -217,7 +230,6 @@ MLX90640_CTRL_RESOLUTION_SHIFT = 10
 MLX90640_CTRL_RESOLUTION_MASK = 0x03 << MLX90640_CTRL_RESOLUTION_SHIFT
 MLX90640_CTRL_MEAS_MODE_SHIFT = 12
 MLX90640_CTRL_MEAS_MODE_MASK = 0x01 << MLX90640_CTRL_MEAS_MODE_SHIFT
-MLX90640_MS_BYTE_SHIFT = 8
 MLX90640_MS_BYTE_MASK = 0xFF00
 MLX90640_LS_BYTE_MASK = 0x00FF
 MLX90640_MSBITS_6_MASK = 0xFC00
@@ -226,14 +238,15 @@ MLX90640_NIBBLE1_MASK = 0x000F
 MLX90640_NIBBLE2_MASK = 0x00F0
 MLX90640_NIBBLE3_MASK = 0x0F00
 MLX90640_NIBBLE4_MASK = 0xF000
+
 SCALEALPHA = 0.000001
+OPENAIR_TA_SHIFT = 8
 
 
 class MLX90640:
     def __init__(self, address: int = 0x33, i2c_driver: MLX90640_I2CDriver = None):
         if i2c_driver is None:
-            print("Please specific I2C driver!")
-            return
+            i2c_driver = MLX90640_I2CDriver()
 
         self.address = address
         self.i2c_driver = i2c_driver
@@ -400,72 +413,93 @@ class MLX90640:
         if ee_data is None:
             ee_data = self.dump_ee()
 
-        self.params.kVdd = (ee_data[51] >> 8) * 32
+        self.params.kVdd = ee_data[51] >> 8
+        if self.params.kVdd > 127:
+            self.params.kVdd -= 256
+        self.params.kVdd *= 32
 
         self.params.vdd25 = (((ee_data[51] & 0xFF) - 256) << 5) - 8192
 
         KvPTAT = (ee_data[50] & 0xFC00) >> 10
         if KvPTAT > 31:
-            KvPTAT = KvPTAT - 64
+            KvPTAT -= 64
         self.params.KvPTAT = KvPTAT / 4096
 
         KtPTAT = ee_data[50] & 0x03FF
         if KtPTAT > 511:
-            KtPTAT = KtPTAT - 1024
+            KtPTAT -= 1024
         self.params.KtPTAT = KtPTAT / 8
 
         self.params.vPTAT25 = ee_data[49]
 
-        self.params.alphaPTAT = (ee_data[16] & 0x0F00) / pow(2, 14) + 8.0
+        self.params.alphaPTAT = (ee_data[16] & 0xF000) / pow(2, 14) + 8.0
 
         self.params.gainEE = ee_data[48]
+        if self.params.gainEE > 32767:
+            self.params.gainEE -= 65536
 
-        self.params.tgc = (ee_data[60] & 0xFF) / 32.0
+        self.params.tgc = ee_data[60] & 0xFF
+        if self.params.tgc > 127:
+            self.params.tgc -= 256
+        self.params.tgc /= 32.0
 
         self.params.resolutionEE = (ee_data[56] & 0x3000) >> 12
 
-        self.params.KsTa = ((ee_data[60] & 0xFF00) >> 8) / 8192.0
+        self.params.KsTa = (ee_data[60] & 0xFF00) >> 8
+        if self.params.KsTa > 127:
+            self.params.KsTa -= 256
+        self.params.KsTa /= 8192.0
 
         step = ((ee_data[63] & 0x3000) >> 12) * 10
         self.params.ct[0] = -40
         self.params.ct[1] = 0
         self.params.ct[2] = (ee_data[63] & 0x00F0) >> 4
         self.params.ct[3] = (ee_data[63] & 0x0F00) >> 8
-        self.params.ct[2] = self.params.ct[2] * step
+        self.params.ct[2] *= step
         self.params.ct[3] = self.params.ct[2] + self.params.ct[3] * step
         self.params.ct[4] = 400
 
         ks_to_scale = (ee_data[63] & 0x000F) + 8
         ks_to_scale = 1 << ks_to_scale
 
-        self.params.ksTo[0] = (ee_data[61] & 0xFF) / ks_to_scale
-        self.params.ksTo[1] = ((ee_data[61] & 0xFF00) >> 8) / ks_to_scale
-        self.params.ksTo[2] = (ee_data[62] & 0xFF) / ks_to_scale
-        self.params.ksTo[3] = ((ee_data[62] & 0xFF00) >> 8) / ks_to_scale
+        self.params.ksTo[0] = ee_data[61] & 0xFF
+        self.params.ksTo[1] = (ee_data[61] & 0xFF00) >> 8
+        self.params.ksTo[2] = ee_data[62] & 0xFF
+        self.params.ksTo[3] = (ee_data[62] & 0xFF00) >> 8
+        for i in range(4):
+            if self.params.ksTo[i] > 127:
+                self.params.ksTo[i] -= 256
+            self.params.ksTo[i] /= ks_to_scale
         self.params.ksTo[4] = -0.0002
 
-        self.params.alpha, self.params.alphaScale = self._extract_alpha_parameters(
-            ee_data
-        )
+        # self.params.alpha, self.params.alphaScale = self._extract_alpha_parameters(
+        #     ee_data
+        # )
+        self._extract_alpha_parameters(ee_data)
 
-        self.params.offset = self._extract_offset_parameters(ee_data)
+        # self.params.offset = self._extract_offset_parameters(ee_data)
+        self._extract_offset_parameters(ee_data)
 
-        self.params.kta, self.params.ktaScale = self._extract_kta_pixel_parameters(
-            ee_data
-        )
+        # self.params.kta, self.params.ktaScale = self._extract_kta_pixel_parameters(
+        #     ee_data
+        # )
+        self._extract_kta_pixel_parameters(ee_data)
 
-        self.params.kv, self.params.kvScale = self._extract_kv_pixel_parameters(ee_data)
+        # self.params.kv, self.params.kvScale = self._extract_kv_pixel_parameters(ee_data)
+        self._extract_kv_pixel_parameters(ee_data)
 
-        (
-            self.params.cpAlpha,
-            self.params.cpOffset,
-            self.params.cpKta,
-            self.params.cpKv,
-        ) = self._extract_cp_parameters(ee_data)
+        # (
+        #     self.params.cpAlpha,
+        #     self.params.cpOffset,
+        #     self.params.cpKta,
+        #     self.params.cpKv,
+        # ) = self._extract_cp_parameters(ee_data)
+        self._extract_cp_parameters(ee_data)
 
-        self.params.calibrationModeEE, self.params.ilChessC = (
-            self._extract_cilc_parameters(ee_data)
-        )
+        # self.params.calibrationModeEE, self.params.ilChessC = (
+        #     self._extract_cilc_parameters(ee_data)
+        # )
+        self._extract_cilc_parameters(ee_data)
 
         warn, broken_pixels, outlier_pixels = self._extract_deviating_pixels(ee_data)
         if not warn:
@@ -475,253 +509,290 @@ class MLX90640:
             print("Error in deviating pixels extraction.")
 
     def _extract_alpha_parameters(self, ee_data):
-        acc_row = [0] * 24
-        acc_column = [0] * 32
-        alpha_temp = [0] * 768
-
-        acc_rem_scale = ee_data[32] & 0x000F
-        acc_column_scale = (ee_data[32] & 0x00F0) >> 4
-        acc_row_scale = (ee_data[32] & 0x0F00) >> 8
-        alpha_scale = ((ee_data[32] & 0xF000) >> 12) + 30
-        alpha_ref = ee_data[33]
+        # extract alpha
+        accRemScale = ee_data[32] & 0x000F
+        accColumnScale = (ee_data[32] & 0x00F0) >> 4
+        accRowScale = (ee_data[32] & 0x0F00) >> 8
+        alphaScale = ((ee_data[32] & 0xF000) >> 12) + 30
+        alphaRef = ee_data[33]
+        accRow = [0] * 24
+        accColumn = [0] * 32
+        alphaTemp = [0] * 768
 
         for i in range(6):
             p = i * 4
-            acc_row[p + 0] = ee_data[34 + i] & 0x000F
-            acc_row[p + 1] = (ee_data[34 + i] & 0x00F0) >> 4
-            acc_row[p + 2] = (ee_data[34 + i] & 0x0F00) >> 8
-            acc_row[p + 3] = (ee_data[34 + i] & 0xF000) >> 12
+            accRow[p + 0] = ee_data[34 + i] & 0x000F
+            accRow[p + 1] = (ee_data[34 + i] & 0x00F0) >> 4
+            accRow[p + 2] = (ee_data[34 + i] & 0x0F00) >> 8
+            accRow[p + 3] = (ee_data[34 + i] & 0xF000) >> 12
 
-        acc_row = [x - 16 if x > 7 else x for x in acc_row]
+        for i in range(24):
+            if accRow[i] > 7:
+                accRow[i] -= 16
 
         for i in range(8):
             p = i * 4
-            acc_column[p + 0] = ee_data[40 + i] & 0x000F
-            acc_column[p + 1] = (ee_data[40 + i] & 0x00F0) >> 4
-            acc_column[p + 2] = (ee_data[40 + i] & 0x0F00) >> 8
-            acc_column[p + 3] = (ee_data[40 + i] & 0xF000) >> 12
+            accColumn[p + 0] = ee_data[40 + i] & 0x000F
+            accColumn[p + 1] = (ee_data[40 + i] & 0x00F0) >> 4
+            accColumn[p + 2] = (ee_data[40 + i] & 0x0F00) >> 8
+            accColumn[p + 3] = (ee_data[40 + i] & 0xF000) >> 12
 
-        acc_column = [x - 16 if x > 7 else x for x in acc_column]
+        for i in range(32):
+            if accColumn[i] > 7:
+                accColumn[i] -= 16
 
         for i in range(24):
             for j in range(32):
                 p = 32 * i + j
-                alpha_temp[p] = (ee_data[64 + p] & 0x03F0) >> 4
-                if alpha_temp[p] > 31:
-                    alpha_temp[p] = alpha_temp[p] - 64
-                alpha_temp[p] = alpha_temp[p] * (1 << acc_rem_scale)
-                alpha_temp[p] = (
-                    alpha_ref
-                    + (acc_row[i] << acc_row_scale)
-                    + (acc_column[j] << acc_column_scale)
-                    + alpha_temp[p]
+                alphaTemp[p] = (ee_data[64 + p] & 0x03F0) >> 4
+                if alphaTemp[p] > 31:
+                    alphaTemp[p] -= 64
+                alphaTemp[p] *= 1 << accRemScale
+                alphaTemp[p] += (
+                    alphaRef
+                    + (accRow[i] << accRowScale)
+                    + (accColumn[j] << accColumnScale)
                 )
-                alpha_temp[p] = alpha_temp[p] / (2**alpha_scale)
-                alpha_temp[p] = (
-                    alpha_temp[p]
-                    - self.params.tgc
+                alphaTemp[p] /= pow(2, alphaScale)
+                alphaTemp[p] -= (
+                    self.params.tgc
                     * (self.params.cpAlpha[0] + self.params.cpAlpha[1])
                     / 2
                 )
-                alpha_temp[p] = 1 / alpha_temp[p]
+                alphaTemp[p] = SCALEALPHA / alphaTemp[p]
+        # print("alphaTemp: ", alphaTemp)
 
-        temp = max(alpha_temp)
+        temp = max(alphaTemp)
+        # print("temp", temp)
 
-        alpha_scale = 0
-        while temp < 32767.4:
-            temp = temp * 2
-            alpha_scale = alpha_scale + 1
+        alphaScale = 0
+        while temp < 32768:
+            temp *= 2
+            alphaScale += 1
 
-        return [round(x * (2**alpha_scale) + 0.5) for x in alpha_temp], alpha_scale
+        for i in range(768):
+            temp = alphaTemp[i] * pow(2, alphaScale)
+            self.params.alpha[i] = int(temp + 0.5)
+
+        self.params.alphaScale = alphaScale
 
     def _extract_offset_parameters(self, ee_data):
-        occ_row = [0] * 24
-        occ_column = [0] * 32
-        offset = [0] * 768  # Initialize offset list
+        # extract offset
+        occRow = [0] * 24
+        occColumn = [0] * 32
 
-        occ_rem_scale = ee_data[16] & 0x000F
-        occ_column_scale = (ee_data[16] & 0x00F0) >> 4
-        occ_row_scale = (ee_data[16] & 0x0F00) >> 8
-        offset_ref = ee_data[17]
+        occRemScale = ee_data[16] & 0x000F
+        occColumnScale = (ee_data[16] & 0x00F0) >> 4
+        occRowScale = (ee_data[16] & 0x0F00) >> 8
+        offsetRef = ee_data[17]
+        if offsetRef > 32767:
+            offsetRef -= 65536
 
         for i in range(6):
             p = i * 4
-            occ_row[p + 0] = ee_data[18 + i] & 0x000F
-            occ_row[p + 1] = (ee_data[18 + i] & 0x00F0) >> 4
-            occ_row[p + 2] = (ee_data[18 + i] & 0x0F00) >> 8
-            occ_row[p + 3] = (ee_data[18 + i] & 0xF000) >> 12
+            occRow[p + 0] = ee_data[18 + i] & 0x000F
+            occRow[p + 1] = (ee_data[18 + i] & 0x00F0) >> 4
+            occRow[p + 2] = (ee_data[18 + i] & 0x0F00) >> 8
+            occRow[p + 3] = (ee_data[18 + i] & 0xF000) >> 12
 
-        occ_row = [x - 16 if x > 7 else x for x in occ_row]
+        for i in range(24):
+            if occRow[i] > 7:
+                occRow[i] -= 16
 
         for i in range(8):
             p = i * 4
-            occ_column[p + 0] = ee_data[24 + i] & 0x000F
-            occ_column[p + 1] = (ee_data[24 + i] & 0x00F0) >> 4
-            occ_column[p + 2] = (ee_data[24 + i] & 0x0F00) >> 8
-            occ_column[p + 3] = (ee_data[24 + i] & 0xF000) >> 12
+            occColumn[p + 0] = ee_data[24 + i] & 0x000F
+            occColumn[p + 1] = (ee_data[24 + i] & 0x00F0) >> 4
+            occColumn[p + 2] = (ee_data[24 + i] & 0x0F00) >> 8
+            occColumn[p + 3] = (ee_data[24 + i] & 0xF000) >> 12
 
-        occ_column = [x - 16 if x > 7 else x for x in occ_column]
+        for i in range(32):
+            if occColumn[i] > 7:
+                occColumn[i] -= 16
 
         for i in range(24):
             for j in range(32):
                 p = 32 * i + j
-                offset[p] = (ee_data[64 + p] & 0xFC00) >> 10
-                if offset[p] > 31:
-                    offset[p] = offset[p] - 64
-                offset[p] = offset[p] * (1 << occ_rem_scale)
-                offset[p] = (
-                    offset_ref
-                    + (occ_row[i] << occ_row_scale)
-                    + (occ_column[j] << occ_column_scale)
-                    + offset[p]
+                self.params.offset[p] = (ee_data[64 + p] & 0xFC00) >> 10
+                if self.params.offset[p] > 31:
+                    self.params.offset[p] -= 64
+                self.params.offset[p] *= 1 << occRemScale
+                self.params.offset[p] += (
+                    offsetRef
+                    + (occRow[i] << occRowScale)
+                    + (occColumn[j] << occColumnScale)
                 )
 
-        return offset  # Return the offset list
-
     def _extract_kta_pixel_parameters(self, ee_data):
-        kta_rc = [0] * 4
-        kta = [0] * 768
+        # extract KtaPixel
+        KtaRC = [0] * 4
+        ktaTemp = [0] * 768
 
-        kta_rc[0] = ee_data[54] >> 8
-        kta_rc[2] = ee_data[54] & 0x00FF
-        kta_rc[1] = ee_data[55] >> 8
-        kta_rc[3] = ee_data[55] & 0x00FF
+        KtaRoCo = (ee_data[54] & 0xFF00) >> 8
+        if KtaRoCo > 127:
+            KtaRoCo -= 256
+        KtaRC[0] = KtaRoCo
 
-        kta_scale1 = ((ee_data[56] & 0x00F0) >> 4) + 8
-        kta_scale2 = ee_data[56] & 0x000F
+        KtaReCo = ee_data[54] & 0x00FF
+        if KtaReCo > 127:
+            KtaReCo -= 256
+        KtaRC[2] = KtaReCo
+
+        KtaRoCe = (ee_data[55] & 0xFF00) >> 8
+        if KtaRoCe > 127:
+            KtaRoCe -= 256
+        KtaRC[1] = KtaRoCe
+
+        KtaReCe = ee_data[55] & 0x00FF
+        if KtaReCe > 127:
+            KtaReCe -= 256
+        KtaRC[3] = KtaReCe
+
+        ktaScale1 = ((ee_data[56] & 0x00F0) >> 4) + 8
+        ktaScale2 = ee_data[56] & 0x000F
 
         for i in range(24):
             for j in range(32):
                 p = 32 * i + j
                 split = 2 * (p // 32 - (p // 64) * 2) + p % 2
-                kta_temp = (ee_data[64 + p] & 0x000E) >> 1
-                if kta_temp > 3:
-                    kta_temp = kta_temp - 8
-                kta_temp = kta_temp * (1 << kta_scale2)
-                kta_temp = kta_rc[split] + kta_temp
-                kta_temp = kta_temp / (2**kta_scale1)
-                kta[p] = kta_temp
+                ktaTemp[p] = (ee_data[64 + p] & 0x000E) >> 1
+                if ktaTemp[p] > 3:
+                    ktaTemp[p] -= 8
+                ktaTemp[p] *= 1 << ktaScale2
+                ktaTemp[p] += KtaRC[split]
+                ktaTemp[p] /= pow(2, ktaScale1)
 
-        temp = max([abs(x) for x in kta])
-        kta_scale1 = 0
-        while temp < 63.4:
-            temp = temp * 2
-            kta_scale1 = kta_scale1 + 1
+        temp = abs(ktaTemp[0])
+        for kta in ktaTemp:
+            temp = max(temp, abs(kta))
+
+        ktaScale1 = 0
+        while temp < 64:
+            temp *= 2
+            ktaScale1 += 1
 
         for i in range(768):
-            temp = kta[i] * (2**kta_scale1)
+            temp = ktaTemp[i] * pow(2, ktaScale1)
             if temp < 0:
-                kta[i] = temp - 0.5
+                self.params.kta[i] = int(temp - 0.5)
             else:
-                kta[i] = temp + 0.5
-
-        return kta, kta_scale1
+                self.params.kta[i] = int(temp + 0.5)
+        self.params.ktaScale = ktaScale1
 
     def _extract_kv_pixel_parameters(self, ee_data):
-        kv_t = [0] * 4
-        kv = [0] * 768
+        KvT = [0] * 4
+        kvTemp = [0] * 768
 
-        kv_ro_co = (ee_data[52] & 0xF000) >> 12
-        if kv_ro_co > 7:
-            kv_ro_co = kv_ro_co - 16
-        kv_t[0] = kv_ro_co
+        KvRoCo = (ee_data[52] & 0xF000) >> 12
+        if KvRoCo > 7:
+            KvRoCo -= 16
+        KvT[0] = KvRoCo
 
-        kv_re_co = (ee_data[52] & 0x0F00) >> 8
-        if kv_re_co > 7:
-            kv_re_co = kv_re_co - 16
-        kv_t[2] = kv_re_co
+        KvReCo = (ee_data[52] & 0x0F00) >> 8
+        if KvReCo > 7:
+            KvReCo -= 16
+        KvT[2] = KvReCo
 
-        kv_ro_ce = (ee_data[52] & 0x00F0) >> 4
-        if kv_ro_ce > 7:
-            kv_ro_ce = kv_ro_ce - 16
-        kv_t[1] = kv_ro_ce
+        KvRoCe = (ee_data[52] & 0x00F0) >> 4
+        if KvRoCe > 7:
+            KvRoCe -= 16
+        KvT[1] = KvRoCe
 
-        kv_re_ce = ee_data[52] & 0x000F
-        if kv_re_ce > 7:
-            kv_re_ce = kv_re_ce - 16
-        kv_t[3] = kv_re_ce
+        KvReCe = ee_data[52] & 0x000F
+        if KvReCe > 7:
+            KvReCe -= 16
+        KvT[3] = KvReCe
 
-        kv_scale = (ee_data[56] & 0x0F00) >> 8
+        kvScale = (ee_data[56] & 0x0F00) >> 8
 
         for i in range(24):
             for j in range(32):
                 p = 32 * i + j
                 split = 2 * (p // 32 - (p // 64) * 2) + p % 2
-                kv_temp = kv_t[split]
-                kv[p] = kv_temp / (2**kv_scale)
+                kvTemp[p] = KvT[split]
+                kvTemp[p] /= pow(2, kvScale)
 
-        temp = max([abs(x) for x in kv])
-        kv_scale = 0
-        while temp < 63.4:
-            temp = temp * 2
-            kv_scale = kv_scale + 1
+        temp = abs(kvTemp[0])
+        for kv in kvTemp:
+            temp = max(temp, abs(kv))
+
+        kvScale = 0
+        while temp < 64:
+            temp *= 2
+            kvScale += 1
 
         for i in range(768):
-            temp = kv[i] * (2**kv_scale)
+            temp = kvTemp[i] * pow(2, kvScale)
             if temp < 0:
-                kv[i] = temp - 0.5
+                self.params.kv[i] = int(temp - 0.5)
             else:
-                kv[i] = temp + 0.5
-
-        return kv, kv_scale
+                self.params.kv[i] = int(temp + 0.5)
+        self.params.kvScale = kvScale
 
     def _extract_cp_parameters(self, ee_data):
-        alpha_sp = [0] * 2
-        offset_sp = [0] * 2
+        offsetSP = [0] * 2
+        alphaSP = [0] * 2
 
-        alpha_scale = ((ee_data[32] & 0xF000) >> 12) + 27
+        alphaScale = ((ee_data[32] & 0xF000) >> 12) + 27
 
-        offset_sp[0] = ee_data[58] & 0x03FF
-        if offset_sp[0] > 511:
-            offset_sp[0] = offset_sp[0] - 1024
+        offsetSP[0] = ee_data[58] & 0x03FF
+        if offsetSP[0] > 511:
+            offsetSP[0] -= 1024
 
-        offset_sp[1] = (ee_data[58] & 0xFC00) >> 10
-        if offset_sp[1] > 31:
-            offset_sp[1] = offset_sp[1] - 64
-        offset_sp[1] = offset_sp[1] + offset_sp[0]
+        offsetSP[1] = (ee_data[58] & 0xFC00) >> 10
+        if offsetSP[1] > 31:
+            offsetSP[1] -= 64
+        offsetSP[1] += offsetSP[0]
 
-        alpha_sp[0] = ee_data[57] & 0x03FF
-        if alpha_sp[0] > 511:
-            alpha_sp[0] = alpha_sp[0] - 1024
-        alpha_sp[0] = alpha_sp[0] / (2**alpha_scale)
+        alphaSP[0] = ee_data[57] & 0x03FF
+        if alphaSP[0] > 511:
+            alphaSP[0] -= 1024
+        alphaSP[0] /= pow(2, alphaScale)
 
-        alpha_sp[1] = (ee_data[57] & 0xFC00) >> 10
-        if alpha_sp[1] > 31:
-            alpha_sp[1] = alpha_sp[1] - 64
-        alpha_sp[1] = (1 + alpha_sp[1] / 128) * alpha_sp[0]
+        alphaSP[1] = (ee_data[57] & 0xFC00) >> 10
+        if alphaSP[1] > 31:
+            alphaSP[1] -= 64
+        alphaSP[1] = (1 + alphaSP[1] / 128) * alphaSP[0]
 
-        cp_kta = ee_data[59] & 0x00FF
-        kta_scale1 = ((ee_data[56] & 0x00F0) >> 4) + 8
-        cp_kta = cp_kta / (2**kta_scale1)
+        cpKta = ee_data[59] & 0x00FF
+        if cpKta > 127:
+            cpKta -= 256
+        ktaScale1 = ((ee_data[56] & 0x00F0) >> 4) + 8
+        self.params.cpKta = cpKta / pow(2, ktaScale1)
 
-        cp_kv = (ee_data[59] & 0xFF00) >> 8
-        kv_scale = (ee_data[56] & 0x0F00) >> 8
-        cp_kv = cp_kv / (2**kv_scale)
+        cpKv = (ee_data[59] & 0xFF00) >> 8
+        if cpKv > 127:
+            cpKv -= 256
+        kvScale = (ee_data[56] & 0x0F00) >> 8
+        self.params.cpKv = cpKv / pow(2, kvScale)
 
-        return alpha_sp, offset_sp, cp_kta, cp_kv
+        self.params.cpAlpha[0] = alphaSP[0]
+        self.params.cpAlpha[1] = alphaSP[1]
+        self.params.cpOffset[0] = offsetSP[0]
+        self.params.cpOffset[1] = offsetSP[1]
 
     def _extract_cilc_parameters(self, ee_data):
-        il_chess_c = [0] * 3
+        ilChessC = [0] * 3
 
-        calibration_mode_ee = (ee_data[10] & 0x0800) >> 4
-        calibration_mode_ee = calibration_mode_ee ^ 0x80
+        self.params.calibrationModeEE = (ee_data[10] & 0x0800) >> 4
+        self.params.calibrationModeEE = self.params.calibrationModeEE ^ 0x80
 
-        il_chess_c[0] = ee_data[53] & 0x003F
-        if il_chess_c[0] > 31:
-            il_chess_c[0] = il_chess_c[0] - 64
-        il_chess_c[0] = il_chess_c[0] / 16.0
+        ilChessC[0] = ee_data[53] & 0x003F
+        if ilChessC[0] > 31:
+            ilChessC[0] -= 64
+        ilChessC[0] /= 16.0
 
-        il_chess_c[1] = (ee_data[53] & 0x07C0) >> 6
-        if il_chess_c[1] > 15:
-            il_chess_c[1] = il_chess_c[1] - 32
-        il_chess_c[1] = il_chess_c[1] / 2.0
+        ilChessC[1] = (ee_data[53] & 0x07C0) >> 6
+        if ilChessC[1] > 15:
+            ilChessC[1] -= 32
+        ilChessC[1] /= 2.0
 
-        il_chess_c[2] = (ee_data[53] & 0xF800) >> 11
-        if il_chess_c[2] > 15:
-            il_chess_c[2] = il_chess_c[2] - 32
-        il_chess_c[2] = il_chess_c[2] / 8.0
+        ilChessC[2] = (ee_data[53] & 0xF800) >> 11
+        if ilChessC[2] > 15:
+            ilChessC[2] -= 32
+        ilChessC[2] /= 8.0
 
-        return calibration_mode_ee, il_chess_c
+        self.params.ilChessC = ilChessC
 
     def _extract_deviating_pixels(self, ee_data):
         broken_pixels = [0xFFFF] * 5
@@ -816,7 +887,7 @@ class MLX90640:
 
         resolution_correction = pow(2, self.params.resolutionEE) / pow(
             2,
-            (frame_data[832] & ~MLX90640_CTRL_RESOLUTION_MASK)
+            (frame_data[832] & MLX90640_CTRL_RESOLUTION_MASK)
             >> MLX90640_CTRL_RESOLUTION_SHIFT,
         )
         vdd = (
@@ -914,35 +985,53 @@ class MLX90640:
 
         return result
 
-    def calculate_to(self, emissivity: float, tr: float, frame_data=None):
+    def calculate_to(self, emissivity: float = 0.95, tr: float = None, frame_data=None):
         if frame_data is None:
             frame_data = self.get_frame_data()
 
         subPage = frame_data[833]
+        alphaCorrR = [0] * 4
+        irDataCP = [0, 0]
+
         vdd = self.get_vdd(frame_data)
         ta = self.get_ta(frame_data)
+        if tr is None:
+            tr = ta - OPENAIR_TA_SHIFT
 
-        ta4 = (ta + 273.15) ** 4
-        tr4 = (tr + 273.15) ** 4
+        ta4 = ta + 273.15
+        ta4 = ta4 * ta4
+        ta4 = ta4 * ta4
+        tr4 = tr + 273.15
+        tr4 = tr4 * tr4
+        tr4 = tr4 * tr4
         taTr = tr4 - (tr4 - ta4) / emissivity
 
-        ktaScale = 2**self.params.ktaScale
-        kvScale = 2**self.params.kvScale
-        alphaScale = 2**self.params.alphaScale
+        ktaScale = pow(2, self.params.ktaScale)
+        kvScale = pow(2, self.params.kvScale)
+        alphaScale = pow(2, self.params.alphaScale)
 
-        alphaCorrR = [
-            1 / (1 + self.params.ksTo[0] * 40),
-            1,
-            1 + self.params.ksTo[1] * self.params.ct[2],
-            (1 + self.params.ksTo[1] * self.params.ct[2])
-            * (1 + self.params.ksTo[2] * (self.params.ct[3] - self.params.ct[2])),
-        ]
+        alphaCorrR[0] = 1 / (1 + self.params.ksTo[0] * 40)
+        alphaCorrR[1] = 1
+        alphaCorrR[2] = 1 + self.params.ksTo[1] * self.params.ct[2]
+        alphaCorrR[3] = alphaCorrR[2] * (
+            1 + self.params.ksTo[2] * (self.params.ct[3] - self.params.ct[2])
+        )
 
-        gain = self.params.gainEE / frame_data[778]
+        # --------- Gain calculation -----------------------------------
+        gain = frame_data[778]
+        if gain > 32767:
+            gain -= 65536
+        gain = self.params.gainEE / gain
 
-        mode = (frame_data[832] & MLX90640_CTRL_MEAS_MODE_MASK) >> 5
+        # --------- To calculation -------------------------------------
+        mode = (frame_data[832] & 0x1000) >> 5
 
-        irDataCP = [frame_data[776] * gain, frame_data[808] * gain]
+        irDataCP[0] = frame_data[776]
+        irDataCP[1] = frame_data[808]
+        for i in range(2):
+            if irDataCP[i] > 32767:
+                irDataCP[i] -= 65536
+            irDataCP[i] *= gain
 
         irDataCP[0] -= (
             self.params.cpOffset[0]
@@ -962,8 +1051,13 @@ class MLX90640:
                 * (1 + self.params.cpKv * (vdd - 3.3))
             )
 
-        result = np.zeros(768)
+        result = [0] * 768
         for pixelNumber in range(768):
+            if self._is_pixel_bad(pixelNumber):
+                # print("Fixing broken pixel %d" % pixelNumber)
+                result[pixelNumber] = -273.15
+                continue
+
             ilPattern = pixelNumber // 32 - (pixelNumber // 64) * 2
             chessPattern = ilPattern ^ (pixelNumber - (pixelNumber // 2) * 2)
             conversionPattern = (
@@ -973,10 +1067,16 @@ class MLX90640:
                 - pixelNumber // 4
             ) * (1 - 2 * ilPattern)
 
-            pattern = ilPattern if mode == 0 else chessPattern
+            if mode == 0:
+                pattern = ilPattern
+            else:
+                pattern = chessPattern
 
             if pattern == frame_data[833]:
-                irData = frame_data[pixelNumber] * gain
+                irData = frame_data[pixelNumber]
+                if irData > 32767:
+                    irData -= 65536
+                irData *= gain
 
                 kta = self.params.kta[pixelNumber] / ktaScale
                 kv = self.params.kv[pixelNumber] / kvScale
@@ -992,7 +1092,7 @@ class MLX90640:
                         - self.params.ilChessC[1] * conversionPattern
                     )
 
-                irData -= self.params.tgc * irDataCP[subPage]
+                irData = irData - self.params.tgc * irDataCP[subPage]
                 irData /= emissivity
 
                 alphaCompensated = (
@@ -1001,47 +1101,47 @@ class MLX90640:
                 alphaCompensated *= 1 + self.params.KsTa * (ta - 25)
 
                 Sx = (
-                    np.sqrt(
-                        np.sqrt(
-                            alphaCompensated**4 * (irData + alphaCompensated * taTr)
-                        )
-                    )
-                    * self.params.ksTo[1]
+                    alphaCompensated
+                    * alphaCompensated
+                    * alphaCompensated
+                    * (irData + alphaCompensated * taTr)
                 )
+                Sx = math.sqrt(math.sqrt(Sx)) * self.params.ksTo[1]
 
                 To = (
-                    np.sqrt(
-                        np.sqrt(
+                    math.sqrt(
+                        math.sqrt(
                             irData
                             / (
                                 alphaCompensated * (1 - self.params.ksTo[1] * 273.15)
                                 + Sx
                             )
+                            + taTr
                         )
                     )
                     - 273.15
                 )
 
                 if To < self.params.ct[1]:
-                    cr_range = 0
+                    torange = 0
                 elif To < self.params.ct[2]:
-                    cr_range = 1
+                    torange = 1
                 elif To < self.params.ct[3]:
-                    cr_range = 2
+                    torange = 2
                 else:
-                    cr_range = 3
+                    torange = 3
 
                 To = (
-                    np.sqrt(
-                        np.sqrt(
+                    math.sqrt(
+                        math.sqrt(
                             irData
                             / (
                                 alphaCompensated
-                                * alphaCorrR[cr_range]
+                                * alphaCorrR[torange]
                                 * (
                                     1
-                                    + self.params.ksTo[cr_range]
-                                    * (To - self.params.ct[cr_range])
+                                    + self.params.ksTo[torange]
+                                    * (To - self.params.ct[torange])
                                 )
                             )
                             + taTr
@@ -1274,3 +1374,36 @@ class MLX90640:
                             to[pixels[pix] - 1] + to[pixels[pix] + 1]
                         ) / 2.0
             pix += 1
+
+    def get_frame(
+        self,
+        emissivity: float = 0.95,
+        tr: float = None,
+        frame_data: list = None,
+        frame_buffer: list = None,
+    ):
+        if frame_data is None:
+            frame_data = self.get_frame_data()
+
+        if tr is None:
+            tr = self.get_ta(frame_data=frame_data) - OPENAIR_TA_SHIFT
+
+        if frame_buffer is None:
+            frame_buffer = [0] * 768
+
+        sub_page = self.get_sub_page_number(frame_data)
+        mode = self.get_cur_mode()
+        temperature_frame = self.calculate_to(emissivity, tr, frame_data)
+        for pixelNumber in range(768):
+            ilPattern = pixelNumber // 32 - (pixelNumber // 64) * 2
+            chessPattern = ilPattern ^ (pixelNumber - (pixelNumber // 2) * 2)
+
+            if mode == 0:
+                pattern = ilPattern
+            else:
+                pattern = chessPattern
+
+            if pattern == sub_page:
+                frame_buffer[pixelNumber] = temperature_frame[pixelNumber]
+
+        return frame_buffer
