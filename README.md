@@ -40,10 +40,13 @@ MLX90640特点：
 
 ## 原理图
 
+https://www.bilibili.com/video/BV1zJ4m1M7GH/
+
 <iframe src="//player.bilibili.com/player.html?bvid=BV1zJ4m1M7GH&page=1" scrolling="no" border="0" frameborder="no" framespacing="0" allowfullscreen="true"> </iframe>
 
-
 ## PCB
+
+https://www.bilibili.com/video/BV1Y7421R7ZX/
 
 <iframe src="//player.bilibili.com/player.html?bvid=BV1Y7421R7ZX&page=1" scrolling="no" border="0" frameborder="no" framespacing="0" allowfullscreen="true"> </iframe>
 
@@ -52,6 +55,8 @@ MLX90640特点：
 ![ActiveBOM](https://imgs.boringhex.top/blog/20240611182124.png)
 
 ## 外壳
+
+https://www.bilibili.com/video/BV1s4421Q7gz/
 
 <iframe src="//player.bilibili.com/player.html?bvid=BV1s4421Q7gz&page=1" scrolling="no" border="0" frameborder="no" framespacing="0" allowfullscreen="true"> </iframe>
 
