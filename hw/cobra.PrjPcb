@@ -189,10 +189,6 @@ DItemRevisionGUID=
 DocumentPath=Outputs\Manufacture\ASSEM\cobra\Pick Place\Pick Place for cobra.txt
 DItemRevisionGUID=
 
-[Parameter1]
-Name=Rev
-Value=.VersionControl_RevNumberShort
-
 [Configuration1]
 Name=Sources
 ParameterCount=0
